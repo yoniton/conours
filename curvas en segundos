@@ -1,0 +1,87 @@
+import os
+import numpy as np
+import rasterio
+from shapely.geometry import LineString
+import geopandas as gpd
+import matplotlib.pyplot as plt
+import dask.array as da
+
+# Ruta del archivo raster y gdf de salida
+raster_path = r"C:\Users\Janus\Downloads\Download-dem-using-API-extract-contour-lines-from-a-DEM-and-generate-DEM-from-curves-main\Download-dem-using-API-extract-contour-lines-from-a-DEM-and-generate-DEM-from-curves-main\Barranquilla_DEMa.tif"
+output_path = r"C:\Users\Janus\Downloads\curvas_de_nivel_Barranquilla1.shp"
+
+# Parámetros para las curvas de nivel
+contour_interval = 0.1
+
+# Leer el archivo raster con dask para procesamiento paralelo
+print("Leyendo el raster...")
+with rasterio.open(raster_path) as src:
+    raster_data = src.read(1)  # Leer la banda de elevación
+    transform = src.transform  # Transformación para coordenadas
+    nodata = src.nodata  # Valor nodata del raster
+    crs = src.crs  # Sistema de coordenadas
+    
+    # Convertir a array dask para procesamiento paralelo
+    raster_data = da.from_array(raster_data, chunks=(1024, 1024))
+
+    # Reemplazar valores nodata por NaN
+    if nodata is not None:
+        raster_data = da.where(raster_data == nodata, np.nan, raster_data)
+
+# Verificar estadísticas en paralelo
+min_elev = da.nanmin(raster_data).compute()
+max_elev = da.nanmax(raster_data).compute()
+print(f"Estadísticas del raster: Min={min_elev}, Max={max_elev}")
+
+# Crear una cuadrícula de coordenadas
+print("Generando coordenadas...")
+height, width = raster_data.shape
+x_coords = np.arange(width)
+y_coords = np.arange(height)
+x_world, y_world = np.meshgrid(
+    np.linspace(0, width - 1, width),
+    np.linspace(0, height - 1, height)
+)
+x_world, y_world = rasterio.transform.xy(transform, y_world, x_world, offset="center")
+x_world = np.array(x_world)
+y_world = np.array(y_world)
+
+# Generar los contornos con matplotlib
+print("Generando curvas de nivel...")
+levels = np.arange(min_elev, max_elev + contour_interval, contour_interval)
+contour_set = plt.contour(x_world, y_world, raster_data.compute(), levels=levels)
+
+# Extraer las curvas como geometrías con sus elevaciones
+print("Extrayendo geometrías de las curvas...")
+contour_lines = []
+contour_elevations = []
+
+# Crear los contornos con matplotlib
+print("Generando curvas de nivel...")
+levels = np.arange(min_elev, max_elev + contour_interval, contour_interval)
+contour_set = plt.contour(x_world, y_world, raster_data.compute(), levels=levels)
+
+# Extraer las curvas como geometrías con sus elevaciones
+print("Extrayendo geometrías de las curvas...")
+contour_lines = []
+contour_elevations = []
+
+# Iterar sobre los contornos con el método actualizado
+for level, path in zip(contour_set.levels, contour_set.get_paths()):
+    vertices = path.vertices  # Coordenadas de la curva
+    if len(vertices) > 1:  # Evitar geometrías vacías
+        line = LineString(vertices)
+        contour_lines.append(line)
+        contour_elevations.append(level)
+
+# Crear un GeoDataFrame con las curvas de nivel
+print("Creando GeoDataFrame...")
+gdf = gpd.GeoDataFrame(
+    {'elevation': contour_elevations, 'geometry': contour_lines},
+    crs=crs.to_wkt()
+)
+
+# Exportar el GeoDataFrame como shapefile
+print(f"Guardando curvas de nivel en {output_path}...")
+gdf.to_file(output_path, driver="ESRI Shapefile")
+print("Proceso completado.")
