@@ -11,7 +11,7 @@ raster_path = r"C:\Users\Janus\Downloads\snsm.tif"
 output_path = r"C:\Users\Janus\Downloads\curvas_de_nivel_sierra.shp"
 
 # Parámetros para las curvas de nivel
-contour_interval = 0.1
+contour_interval = 1
 
 # Leer el archivo raster con dask para procesamiento paralelo
 print("Leyendo el raster...")
@@ -56,23 +56,40 @@ print("Extrayendo geometrías de las curvas...")
 contour_lines = []
 contour_elevations = []
 
-# Crear los contornos con matplotlib
-print("Generando curvas de nivel...")
-levels = np.arange(min_elev, max_elev + contour_interval, contour_interval)
-contour_set = plt.contour(x_world, y_world, raster_data.compute(), levels=levels)
+# Límites del cuadro (calculando las coordenadas de las esquinas)
+xmin, ymin = rasterio.transform.xy(transform, 0, 0)  # Esquina inferior izquierda
+xmax, ymax = rasterio.transform.xy(transform, height-1, width-1)  # Esquina superior derecha
 
-# Extraer las curvas como geometrías con sus elevaciones
-print("Extrayendo geometrías de las curvas...")
-contour_lines = []
-contour_elevations = []
+# Función para verificar intersección con líneas anteriores
+def check_intersection(new_line, existing_lines):
+    for line in existing_lines:
+        if new_line.intersects(line):
+            return True  # Si intersecta con alguna línea, devolver True
+    return False  # Si no intersecta con ninguna, devolver False
 
-# Iterar sobre los contornos con el método actualizado
-for level, path in zip(contour_set.levels, contour_set.get_paths()):
-    vertices = path.vertices  # Coordenadas de la curva
-    if len(vertices) > 1:  # Evitar geometrías vacías
-        line = LineString(vertices)
-        contour_lines.append(line)
-        contour_elevations.append(level)
+# Iterar sobre los contornos y extraer los niveles de elevación
+for level, collection in zip(contour_set.levels, contour_set.collections):
+    for path in collection.get_paths():
+        for coords in path.to_polygons():
+            if len(coords) > 1:  # Evitar geometrías vacías
+                coords_array = np.array(coords)  # Convertir a un array de numpy
+
+                # Verificar si la línea cruza los bordes
+                if (
+                    np.any(coords_array[:, 0] == xmin) or
+                    np.any(coords_array[:, 0] == xmax) or
+                    np.any(coords_array[:, 1] == ymin) or
+                    np.any(coords_array[:, 1] == ymax)
+                ):
+                    # Mantener la línea abierta en los bordes
+                    line = LineString(coords_array[:-1])  # Eliminamos el último punto (en el borde)
+                else:
+                    line = LineString(coords_array)
+
+                # Verificar intersección con líneas anteriores
+                if not check_intersection(line, contour_lines):
+                    contour_lines.append(line)
+                    contour_elevations.append(level)  # Asociar el nivel actual a la geometría
 
 # Crear un GeoDataFrame con las curvas de nivel
 print("Creando GeoDataFrame...")
